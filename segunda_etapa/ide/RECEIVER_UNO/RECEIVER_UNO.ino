@@ -208,10 +208,7 @@ void procesarFrameRecibido(const Enlace::TramaLigera &trama) {
   switch (trama.control) {
     case Protocolo::TRAMA_HANDSHAKE:
       Serial.println(F("[HANDSHAKE] Recibido"));
-      if (progreso.estado == ESTADO_COMPLETO) {
-        resetReceiver(false);
-      }
-      if (progreso.estado == ESTADO_ESPERANDO) {
+      if (progreso.estado == ESTADO_ESPERANDO || progreso.estado == ESTADO_COMPLETO) {
         Serial.println(F("[HANDSHAKE] Estado OK, procesando..."));
         progreso.estado = ESTADO_RECIBIENDO;
         progreso.framesRecibidos = 0;
@@ -394,8 +391,7 @@ void imprimirEstado() {
 }
 
 // ============ RESET RECEIVER ============
-// Usar parametro binario para indicar si el parser debe ser reiniciado
-void resetReceiver(bool resetParser) {
+void resetReceiver() {
   progreso.estado = ESTADO_ESPERANDO;
   progreso.framesRecibidos = 0;
   progreso.framesTotales = 0;
@@ -406,7 +402,5 @@ void resetReceiver(bool resetParser) {
   tramasObservadas = 0;
   erroresDetectados = 0;
   ventanaRx.reiniciar();
-  if (resetParser) {
-    parserRx.reiniciar();
-  }
+  parserRx.reiniciar();
 }
