@@ -1,0 +1,29 @@
+<circuit version="1.1.0-SR2" rev="260312" stepSize="1000000" stepsPS="1000000" NLsteps="100000" reaStep="1000000" animate="0" >
+
+<item itemtype="Subcircuit" CircId="Uno-1" mainComp="false" Show_id="true" Show_Val="false" Pos="-428,156" rotation="0" hflip="1" vflip="1" label="Uno-1-RECEIVER" idLabPos="0,-20" labelrot="0" valLabPos="-16,20" valLabRot="0" Logic_Symbol="false">
+<mainCompProps MainCompId="mega328-109" Frequency="16 MHz" Program="ide/RECEIVER_UNO/build/arduino.avr.uno/RECEIVER_UNO.ino.hex" Auto_Load="true" saveEepr="true" MainMcu="true" SerialMon="1" />
+</item>
+
+<item itemtype="Subcircuit" CircId="Nano-2" mainComp="false" Show_id="true" Show_Val="false" Pos="-568,184" rotation="0" hflip="1" vflip="1" label="Nano-2" idLabPos="0,-20" labelrot="0" valLabPos="-16,20" valLabRot="0">
+<mainCompProps MainCompId="m328 TQFP-269" Frequency="16 MHz" Program="ide/SENDER_NANO/build/arduino.avr.nano/SENDER_NANO.ino.hex" Auto_Load="false" saveEepr="true" MainMcu="false" SerialMon="1" />
+</item>
+
+<item itemtype="SerialPort" CircId="SerialPort-3" mainComp="false" Show_id="true" Show_Val="false" Pos="-400,116" rotation="0" hflip="1" vflip="1" label="UNO4800" idLabPos="-20,-32" labelrot="0" valLabPos="-16,20" valLabRot="0" Auto="true" Port="COM30" Baudrate="4800 _Bd" DataBits="8 _bits" StopBits="1 _bits" SerialMon="false" />
+
+<item itemtype="SerialPort" CircId="SerialPort-4" mainComp="false" Show_id="true" Show_Val="false" Pos="-608,128" rotation="0" hflip="1" vflip="1" label="NANO4800" idLabPos="-20,-32" labelrot="0" valLabPos="-16,20" valLabRot="0" Auto="true" Port="COM28" Baudrate="4800 _Bd" DataBits="8 _bits" StopBits="1 _bits" SerialMon="false" />
+
+<item itemtype="Connector" uid="Connector-4" startpinid="Uno-1-GND2" endpinid="Nano-2-GND0" pointList="-420,292,-440,292,-440,400,-652,400,-652,224,-560,224" />
+
+<item itemtype="Connector" uid="Connector-36" startpinid="Uno-1-11" endpinid="Nano-2-10" pointList="-420,268,-484,268,-484,356,-576,356,-576,296,-560,296" />
+
+<item itemtype="Connector" uid="Connector-37" startpinid="Nano-2-11" endpinid="Uno-1-10" pointList="-560,304,-600,304,-600,360,-456,360,-456,260,-420,260" />
+
+<item itemtype="Connector" uid="Connector-135" startpinid="Uno-1-1" endpinid="SerialPort-3-pin1" pointList="-420,180,-440,180,-440,124" />
+
+<item itemtype="Connector" uid="Connector-136" startpinid="Uno-1-0" endpinid="SerialPort-3-pin0" pointList="-420,172,-460,172,-460,108,-440,108" />
+
+<item itemtype="Connector" uid="Connector-137" startpinid="Nano-2-0" endpinid="SerialPort-4-pin0" pointList="-560,208,-672,208,-672,120,-648,120" />
+
+<item itemtype="Connector" uid="Connector-138" startpinid="Nano-2-1" endpinid="SerialPort-4-pin1" pointList="-560,200,-648,200,-648,136" />
+
+</circuit>

@@ -1,0 +1,9 @@
+segunda_etapa/arduino/.gitignore
+.vscode/
+__pycache__/
+*.pyc
+segunda_etapa/holamundo.txt
+segunda_etapa/ide/RECEIVER_UNO/build_orig/
+segunda_etapa/recibidos/
+segunda_etapa/resultados/
+segunda_etapa/src/cliente/resultados/
