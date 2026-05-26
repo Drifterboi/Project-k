@@ -40,9 +40,7 @@ Progreso progreso = {ESTADO_ESPERANDO, 0, 0, 0, 0, 0, 0};
 Enlace::VentanaRecepcion ventanaRx(4);
 Enlace::ParserStreaming parserRx;
 unsigned long ultimoFrameTime = 0;
-unsigned long ultimoStatusTime = 0;
 const unsigned long TIMEOUT_FRAME = 5000;
-const unsigned long STATUS_PRINT_INTERVAL = 500;  // Imprimir estado cada 500ms
 uint32_t tramasObservadas = 0;
 uint32_t erroresDetectados = 0;
 
@@ -80,15 +78,15 @@ void procesarComandoSETBAUD(const char* comando) {
     return;
   }
   
-  uint16_t nuevoBaud = atoi(ptr + 1);
-  if (nuevoBaud == 0) {
+  uint16_t nuevoBoand = atoi(ptr + 1);
+  if (nuevoBoand == 0) {
     Serial.println(F("[ERROR] Baudrate inválido"));
     return;
   }
   
-  guardarBaudRateEEPROM(nuevoBaud);
+  guardarBaudRateEEPROM(nuevoBoand);
   Serial.print(F("[OK] Baudrate cambiado a "));
-  Serial.println(nuevoBaud);
+  Serial.println(nuevoBoand);
   Serial.println(F("[INFO] Reiniciando..."));
   delay(100);
   
@@ -101,8 +99,30 @@ void procesarComandoSETBAUD(const char* comando) {
 void setup() {
   uint16_t baud = leerBaudRateEEPROM();
   if (baud == 0 || baud == 0xFFFF) baud = SERIAL_BAUD;
+  
+  // Serial (USB) usa baudrate variable (puede ser 4800, 9600, 19200)
   Serial.begin(baud);
-  FisicaUno::iniciar(baud);
+  delay(1000);
+  
+  // Limpiar buffers completamente
+  Serial.flush();
+  while (Serial.available()) {
+    Serial.read();  // Descartar basura inicial
+  }
+  
+  delay(500);
+  Serial.println(F("\n\n=== ARDUINO UNO INICIANDO ==="));
+  Serial.print(F("[STARTUP] Serial (USB) baudrate: "));
+  Serial.println(baud);
+  
+  // FisicaUno (SoftwareSerial/pines 10-11) SIEMPRE usa 4800 bps
+  // Esto es más confiable para Arduino↔Arduino
+  FisicaUno::iniciar(4800);  // El parámetro es ignorado en fisica_uno.cpp
+  delay(500);
+  Serial.println(F("[STARTUP] SoftwareSerial baudrate: 4800 (fijo)"));
+  Serial.println(F("[STARTUP] Esperando handshake del Nano..."));
+  Serial.println(F("==============================\n"));
+  
   delay(1000);
 
   progreso.tiempoInicio = millis();
@@ -111,6 +131,16 @@ void setup() {
 
 // ============ LOOP PRINCIPAL ============
 void loop() {
+  // === DEBUG: Ver que el loop está corriendo ===
+  static unsigned long lastDebugTime = 0;
+  if (millis() - lastDebugTime > 5000) {
+    lastDebugTime = millis();
+    Serial.print(F("\n[ESTADO UNO] Loop activo | Estado:"));
+    Serial.print(progreso.estado);
+    Serial.print(F(" | Bytes recibidos:"));
+    Serial.println(progreso.bytesRecibidos);
+  }
+  
   // Procesar comandos ASCII desde USB (ej. SETBAUD:xxxx)
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
@@ -124,18 +154,17 @@ void loop() {
 
   procesarEntradaSerial();
 
-  // Imprimir estado periódicamente cuando está recibiendo
-  if (progreso.estado == ESTADO_RECIBIENDO &&
-      (millis() - ultimoStatusTime) > STATUS_PRINT_INTERVAL) {
-    imprimirEstado();
-    ultimoStatusTime = millis();
-  }
-
   if (progreso.estado == ESTADO_RECIBIENDO &&
       (millis() - ultimoFrameTime) > TIMEOUT_FRAME) {
     erroresDetectados++;
     progreso.estado = ESTADO_ERROR;
     ultimoFrameTime = millis();
+  }
+
+  // Reset después de completar o error
+  if (progreso.estado == ESTADO_COMPLETO || progreso.estado == ESTADO_ERROR) {
+    delay(100);
+    resetReceiver();
   }
 }
 
@@ -207,18 +236,29 @@ void procesarFrameRecibido(const Enlace::TramaLigera &trama) {
 
   switch (trama.control) {
     case Protocolo::TRAMA_HANDSHAKE:
-      Serial.println(F("[HANDSHAKE] Recibido"));
-      if (progreso.estado == ESTADO_ESPERANDO || progreso.estado == ESTADO_COMPLETO) {
-        Serial.println(F("[HANDSHAKE] Estado OK, procesando..."));
+      Serial.print(F("[UNO HS RECIBIDO] Dir:0x"));
+      Serial.print(trama.direccion, HEX);
+      Serial.print(F(" Long:"));
+      Serial.print(trama.longitud);
+      Serial.print(F(" Estado:"));
+      Serial.println(progreso.estado);
+      
+      if (progreso.estado == ESTADO_ESPERANDO) {
+        Serial.println(F("[UNO HS OK] Procesando handshake..."));
         progreso.estado = ESTADO_RECIBIENDO;
         progreso.framesRecibidos = 0;
         progreso.bytesRecibidos = 0;
         procesarMetadataHandshake(trama);
         tramasObservadas = 0;
         erroresDetectados = 0;
+        Serial.print(F("[UNO HS META] Bytes totales:"));
+        Serial.print(progreso.bytesTotales);
+        Serial.print(F(" Frames:"));
+        Serial.println(progreso.framesTotales);
+        Serial.println(F("[UNO HS ENVIO ACK] ack=0"));
         enviarAck(0);
       } else {
-        Serial.print(F("[HANDSHAKE] Rechazado - Estado: "));
+        Serial.print(F("[UNO HS RECHAZADO] Estado:"));
         Serial.println(progreso.estado);
       }
       break;
@@ -271,6 +311,9 @@ void procesarFrameRecibido(const Enlace::TramaLigera &trama) {
 
 // ============ ENVIAR ACK ============
 void enviarAck(uint8_t ack) {
+  Serial.print(F("[UNO ACK SEND] ack="));
+  Serial.println(ack);
+  
   Protocolo::Trama ackTrama = Enlace::crearAck(Protocolo::NODO_NANO, ack);
   uint8_t bufferTx[Protocolo::TAM_MAX_TRAMA];
   uint16_t longitudSalida;
@@ -278,15 +321,17 @@ void enviarAck(uint8_t ack) {
       ackTrama, bufferTx, Protocolo::TAM_MAX_TRAMA, longitudSalida);
 
   if (estado == Enlace::CODIFICACION_OK) {
+    Serial.print(F("[UNO ACK CODIFICADO] Long:"));
+    Serial.println(longitudSalida);
+    
     if (!FisicaUno::escribirBuffer(bufferTx, longitudSalida)) {
-      Serial.println(F("[ERROR] No se pudo enviar ACK por capa fisica."));
+      Serial.println(F("[UNO ACK ERROR FISICA] No se envio"));
       return;
     }
-
-    Serial.print(F("[ACK] Enviado ack="));
-    Serial.println(ack);
+    Serial.println(F("[UNO ACK ENVIADO]"));
   } else {
-    Serial.println(F("[ERROR] No se pudo codificar ACK."));
+    Serial.print(F("[UNO ACK ERROR CODIF] Estado:"));
+    Serial.println(estado);
   }
 }
 
@@ -372,6 +417,9 @@ void imprimirEstado() {
   const char *estadoStr[] = {"ESPERANDO", "RECIBIENDO", "COMPLETO", "ERROR"};
   uint32_t tiempoTranscurrido = (millis() - progreso.tiempoInicio) / 1000;
 
+  Serial.println(F("\n╔════════════════════════════════════╗"));
+  Serial.println(F("║       ESTADO DEL RECEIVER          ║"));
+  Serial.println(F("╚════════════════════════════════════╝"));
   Serial.print(F("Estado: "));
   Serial.println(estadoStr[progreso.estado]);
   Serial.print(F("Frames: "));
@@ -382,12 +430,15 @@ void imprimirEstado() {
   Serial.print(progreso.bytesRecibidos);
   Serial.print(F("/"));
   Serial.println(progreso.bytesTotales);
+  Serial.print(F("Progreso: "));
+  imprimirPorcentajeCent(calcularProgresoCent());
+  Serial.println(F("%"));
   Serial.print(F("Tasa Error: "));
   imprimirPorcentajeCent(calcularTasaErrorCent());
   Serial.println(F("%"));
   Serial.print(F("Tiempo: "));
   Serial.print(tiempoTranscurrido);
-  Serial.println(F("s"));
+  Serial.println(F("s\n"));
 }
 
 // ============ RESET RECEIVER ============

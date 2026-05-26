@@ -7,8 +7,14 @@ namespace FisicaUno {
 static bool hammingActivo_ = true;
 static SoftwareSerial enlaceSerial(PIN_RX, PIN_TX);  // RX=11, TX=10 (cruzado para Uno)
 
+// IMPORTANTE: SoftwareSerial SIEMPRE usa 4800 bps para comunicación entre Arduinos
+// Esto es más confiable que baudrates mayores con SoftwareSerial
+const uint32_t SOFTWARESERIAL_BAUDRATE = 4800;
+
 void iniciar(uint32_t baudrate) {
-  enlaceSerial.begin(baudrate);
+  // Ignoramos el parámetro baudrate y siempre usamos 4800 para SoftwareSerial
+  // Esto asegura que Arduino↔Arduino sea confiable
+  enlaceSerial.begin(SOFTWARESERIAL_BAUDRATE);
 }
 
 void configurarHamming(bool activo) {

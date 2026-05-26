@@ -22,19 +22,24 @@ Notes:
 
 from __future__ import annotations
 
-import csv
-from datetime import datetime
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 import tkinter as tk
 from queue import Empty, Queue
 from tkinter import ttk
 from tkinter import messagebox
+from datetime import datetime
+import csv
 
 import serial
 import serial.tools.list_ports
+
+# Agregar ruta al path para importar config
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from comun.config import DEFAULT_BAUDRATE, SERIAL_TIMEOUT
 
 
 class ReceiverState:
@@ -71,7 +76,7 @@ class SerialMonitorThread(threading.Thread):
 
     def run(self) -> None:
         try:
-            with serial.Serial(self.port, self.baudrate, timeout=1.0) as ser:  # 1 segundo para mejor estabilidad
+            with serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT) as ser:
                 while not self._stop_requested.is_set():
                     try:
                         raw = ser.readline()
@@ -118,11 +123,7 @@ class App:
         self.queue: Queue[tuple[str, str]] = Queue()
         self.monitor_thread: SerialMonitorThread | None = None
         self.serial_port_var = tk.StringVar(value='')
-        self.baudrate_var = tk.StringVar(value='9600')
-        
-        # Variables para tracking de recepción
-        self.transfer_start_time = None
-        self.transfer_end_time = None
+        self.baudrate_var = tk.StringVar(value=str(DEFAULT_BAUDRATE))
 
         self.build_ui()
         self.refresh_ports()
@@ -150,6 +151,7 @@ class App:
         )
         baudrate_selector.grid(row=1, column=1, sticky='w', pady=(10, 0))
         tk.Button(top, text='Conectar', command=self.toggle_connection).grid(row=1, column=2, pady=(10, 0))
+        tk.Button(top, text='Reset', command=self.reset_receiver_state).grid(row=1, column=3, sticky='w', padx=(5, 0), pady=(10, 0))
 
         status_frame = tk.LabelFrame(self.root, text='Estado del Receiver', padx=10, pady=10)
         status_frame.pack(fill='x', padx=10, pady=(10, 0))
@@ -235,6 +237,15 @@ class App:
             self.append_log('Desconectado.')
         self.update_connect_button()
 
+    def reset_receiver_state(self) -> None:
+        """Reset todos los valores del receptor a iniciales"""
+        self.state.reset()
+        self.update_status_widgets()
+        self.log_text.config(state='normal')
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.config(state='disabled')
+        self.append_log('Estado reseteado a valores iniciales.')
+
     def update_connect_button(self) -> None:
         label = 'Desconectar' if self.monitor_thread and self.monitor_thread.is_alive() else 'Conectar'
         for widget in self.root.winfo_children():
@@ -270,41 +281,20 @@ class App:
     def handle_line(self, line: str) -> None:
         self.append_log(line)
         if self.STATUS_PATTERNS['handshake'].search(line):
-            # Agregar separador visual para nueva transferencia
-            self.append_log("=" * 70)
-            self.append_log("[NUEVA TRANSFERENCIA - Reseteando estado...]")
-            self.append_log("=" * 70)
-            
-            # Registrar tiempo de inicio
-            self.transfer_start_time = time.time()
-            self.transfer_end_time = None
-            
-            # Reset completo del estado para nueva transferencia
             self.state.estado = 'RECIBIENDO'
             self.state.mensaje_lcd = 'Inicio de transmision...'
             self.state.estado_enlace = 'Estado de enlace optimo...'
             self.state.tiempo_inicio = time.time()
             self.state.chunks_recibidos = {}
             self.state.archivo_guardado = None
-            self.state.frames_recibidos = 0
-            self.state.bytes_recibidos = 0
-            self.state.tasa_error = 0.0
-            self.state.porcentaje_transferencia = None
-            self.state.ultimo_ack = None
-            self.state.ultimo_nack = None
-            self.state.ultimo_mensaje = ''
             return
 
         if self.STATUS_PATTERNS['final'].search(line):
             self.state.estado = 'COMPLETO'
             self.state.mensaje_lcd = 'Transmision Finalizada!'
             self.state.porcentaje_transferencia = 100.0
-            # Registrar tiempo final y guardar resultados
-            self.transfer_end_time = time.time()
-            self.save_reception_results()
             self.guardar_archivo_reconstruido()
-            # Preparar para próxima transferencia después de un pequeño delay
-            self.root.after(500, self.preparar_siguiente_transferencia)
+            self.state.reset()
             return
 
         for key, pattern in self.STATUS_PATTERNS.items():
@@ -375,63 +365,6 @@ class App:
 
         self.state.chunks_recibidos[seq] = datos
 
-    def save_reception_results(self) -> None:
-        """Guardar resultados de recepción en CSV sin sobrescribir."""
-        try:
-            # Crear carpeta resultados si no existe
-            resultados_dir = Path('resultados')
-            resultados_dir.mkdir(exist_ok=True)
-            
-            # Archivo CSV
-            csv_file = resultados_dir / 'pruebas_transferencia.csv'
-            
-            # Calcular duración
-            duracion_segundos = 0
-            if self.transfer_start_time and self.transfer_end_time:
-                duracion_segundos = self.transfer_end_time - self.transfer_start_time
-            
-            # Datos a guardar
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            baudrate = self.baudrate_var.get()
-            
-            # Headers del CSV
-            headers = [
-                'Fecha/Hora (Recepción)',
-                'Baudrate (bps)',
-                'Frames Recibidos',
-                'Frames Totales',
-                'Bytes Recibidos',
-                'Bytes Totales',
-                'Duración (s)',
-                'Tasa Error (%)',
-                'Estado'
-            ]
-            
-            # Crear o abrir CSV en modo append
-            file_exists = csv_file.exists()
-            with open(csv_file, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f, delimiter=',')
-                
-                # Si el archivo no existe, crear columna separadora o comentario
-                if not file_exists:
-                    # Escribir encabezado general si es primera vez
-                    pass
-                
-                # Escribir datos de recepción
-                writer.writerow([
-                    f'{timestamp} (RX)',
-                    baudrate,
-                    str(self.state.frames_recibidos),
-                    str(self.state.frames_totales if self.state.frames_totales else '-'),
-                    str(self.state.bytes_recibidos),
-                    str(self.state.bytes_totales if self.state.bytes_totales else '-'),
-                    f'{duracion_segundos:.2f}',
-                    f'{self.state.tasa_error:.2f}',
-                    'RECIBIDO'
-                ])
-        except Exception as exc:
-            self.append_log(f'[ERROR] Al guardar resultados: {exc}')
-
     def guardar_archivo_reconstruido(self) -> None:
         if not self.state.chunks_recibidos:
             self.state.ultimo_mensaje = 'No hay datos de archivo para guardar'
@@ -447,23 +380,52 @@ class App:
         salida_dir = Path(__file__).resolve().parents[2] / 'recibidos'
         salida_dir.mkdir(parents=True, exist_ok=True)
         
-        # Generar nombre único con timestamp
-        from datetime import datetime
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        salida = salida_dir / f'archivo_recibido_{timestamp}.txt'
-        
-        # Si el archivo ya existe, añadir contador
-        contador = 1
-        base_path = salida
-        while salida.exists():
-            salida = salida_dir / f'archivo_recibido_{timestamp}_{contador}.txt'
-            contador += 1
-        
+        nombre_archivo = f'archivo_recibido_{timestamp}.txt'
+        salida = salida_dir / nombre_archivo
         salida.write_bytes(contenido)
 
         self.state.archivo_guardado = str(salida)
         self.state.ultimo_mensaje = f'Archivo guardado: {salida.name}'
         self.append_log(f'[ARCHIVO] Guardado en {salida}')
+        
+        # Guardar en CSV
+        self.guardar_resultado_csv(nombre_archivo, len(contenido))
+
+    def guardar_resultado_csv(self, nombre_archivo: str, bytes_recibidos: int) -> None:
+        resultados_dir = Path(__file__).resolve().parents[2] / 'resultados'
+        resultados_dir.mkdir(parents=True, exist_ok=True)
+        csv_file = resultados_dir / 'pruebas_transferencia.csv'
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        duracion = (self.state.tiempo_transcurrido) if self.state.tiempo_transcurrido else 0
+        
+        headers = ['Timestamp', 'Baudrate', 'Payload', 'Ventana', 'Archivo', 'Bytes_Total', 'Bytes_Recibidos', 'Frames_Total', 'Frames_Recibidos', 'Duracion_seg', 'Tasa_Error_%', 'Estado']
+        
+        row = [
+            timestamp,
+            '4800',
+            '-',
+            '-',
+            nombre_archivo,
+            self.state.bytes_totales if self.state.bytes_totales else 0,
+            bytes_recibidos,
+            self.state.frames_totales if self.state.frames_totales else 0,
+            self.state.frames_recibidos,
+            f'{duracion:.2f}',
+            f'{self.state.tasa_error:.2f}',
+            'COMPLETO' if self.state.estado == 'COMPLETO' else self.state.estado
+        ]
+        
+        file_exists = csv_file.exists()
+        try:
+            with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(headers)
+                writer.writerow(row)
+        except Exception as e:
+            self.append_log(f'[ERROR] No se pudo guardar CSV: {e}')
 
     def append_log(self, text: str) -> None:
         self.state.log_lines.append(text)
@@ -492,27 +454,6 @@ class App:
         else:
             self.lcd_progress_label.config(text=f'Progreso: {self.state.porcentaje_transferencia:.2f} %')
         self.lcd_error_label.config(text=f'Tasa de error estimada: {float(self.state.tasa_error):.2f} %')
-
-    def preparar_siguiente_transferencia(self) -> None:
-        """Prepara el estado para recibir el siguiente archivo."""
-        self.state.estado = 'ESPERANDO'
-        self.state.frames_recibidos = 0
-        self.state.frames_totales = None
-        self.state.bytes_recibidos = 0
-        self.state.bytes_totales = None
-        self.state.tasa_error = 0.0
-        self.state.chunks_recibidos = {}
-        self.state.archivo_guardado = None
-        self.state.porcentaje_transferencia = None
-        self.state.ultimo_ack = None
-        self.state.ultimo_nack = None
-        self.state.ultimo_mensaje = ''
-        self.state.tiempo_inicio = None
-        self.state.tiempo_transcurrido = 0
-        self.state.mensaje_lcd = 'Inicio de transmision...'
-        self.state.estado_enlace = 'Estado de enlace optimo...'
-        self.append_log('[INFO] Listo para recibir siguiente transferencia.')
-        self.update_status_widgets()
 
 
 def main() -> None:

@@ -5,8 +5,8 @@
 
 namespace FisicaUno {
 
-const uint8_t PIN_RX = 10;  // Recibe del NANO TX (pin 10 del NANO)
-const uint8_t PIN_TX = 11;  // Envía al NANO RX (pin 11 del NANO)
+const uint8_t PIN_RX = 11;  // ← INVERTIDO para Uno (escucha del Nano en pin 11)
+const uint8_t PIN_TX = 10;  // ← INVERTIDO para Uno (envía a Nano en pin 10)
 
 void iniciar(uint32_t baudrate);
 void configurarHamming(bool activo);

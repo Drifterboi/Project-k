@@ -77,8 +77,7 @@ Enlace::ParserStreaming parserRespuesta;
 
 // Contadores de tiempo para manejar retransmisiones y detectar timeouts.
 unsigned long ultimoFrameTime = 0;
-unsigned long TIMEOUT_ACK = 2000;
-uint16_t currentBaudRate = SERIAL_BAUD;
+const unsigned long TIMEOUT_ACK = 2000;
 
 // Buffer para recepción y variables para almacenar el último ACK/NACK recibido
 uint16_t bytesDisponibles = 0;
@@ -149,17 +148,15 @@ void procesarComandoSETBAUD(const char* comando) {
     return;
   }
   
-  uint16_t nuevoBaud = atoi(ptr + 1);
-  if (nuevoBaud == 0) {
+  uint16_t nuevoBoand = atoi(ptr + 1);
+  if (nuevoBoand == 0) {
     Serial.println(F("[ERROR] Baudrate inválido"));
     return;
   }
   
-  guardarBaudRateEEPROM(nuevoBaud);
-  currentBaudRate = nuevoBaud;
-  updateTimeoutACK(nuevoBaud);
+  guardarBaudRateEEPROM(nuevoBoand);
   Serial.print(F("[OK] Baudrate cambiado a "));
-  Serial.println(nuevoBaud);
+  Serial.println(nuevoBoand);
   Serial.println(F("[INFO] Reiniciando..."));
   delay(100);
   
@@ -171,26 +168,53 @@ void procesarComandoSETBAUD(const char* comando) {
 void setup() {
   uint16_t baud = leerBaudRateEEPROM();
   if (baud == 0 || baud == 0xFFFF) baud = SERIAL_BAUD;
-  currentBaudRate = baud;
+  
+  // Serial (USB) usa baudrate variable (puede ser 4800, 9600, 19200)
   Serial.begin(baud);
-  Fisica::iniciar(baud);
-  updateTimeoutACK(baud);
+  delay(1000);
+  
+  // Limpiar buffers completamente
+  Serial.flush();
+  while (Serial.available()) {
+    Serial.read();  // Descartar basura inicial
+  }
+  
+  delay(500);
+  Serial.println(F("\n\n=== ARDUINO NANO INICIANDO ==="));
+  Serial.print(F("[STARTUP] Serial (USB) baudrate: "));
+  Serial.println(baud);
+  
+  // Fisica (SoftwareSerial/pines 10-11) SIEMPRE usa 4800 bps
+  // Esto es más confiable para Arduino↔Arduino
+  Fisica::iniciar(4800);  // El parámetro es ignorado en fisica.cpp
+  delay(500);
+  Serial.println(F("[STARTUP] SoftwareSerial baudrate: 4800 (fijo)"));
+  Serial.println(F("[STARTUP] Esperando comandos de Python..."));
+  Serial.println(F("==============================\n"));
+  
   delay(1000);
   setDireccionDestino(Protocolo::NODO_UNO);
 }
 
-void updateTimeoutACK(uint16_t baud) {
-  unsigned long bytesPerSecond = (baud / 10);
-  unsigned long tramaBytes = 50 + (Protocolo::MAX_CARGA_UTIL * 2);
-  unsigned long msPerTrama = (tramaBytes * 1000) / (bytesPerSecond > 0 ? bytesPerSecond : 1);
-  TIMEOUT_ACK = max(3000UL, (msPerTrama + 1000));
-}
-
 // ============ LOOP PRINCIPAL - Lógica del transmisor ============
 void loop() {
-  // CRITICAL: Always try to process application commands (START, DATA)
-  // Don't restrict to ESTADO_PREPARANDO only - we need to receive DATA during transmission
-  if (Serial.available()) {
+  // === DEBUG: Ver el estado actual del Arduino (cada 5 segundos) ===
+  static unsigned long lastDebugTime = 0;
+  if (millis() - lastDebugTime > 5000) {
+    lastDebugTime = millis();
+    Serial.print(F("\n[ESTADO] Loop activo | Estado:"));
+    Serial.print(progreso.estado);
+    Serial.print(F(" | Archivo:"));
+    Serial.print(archivoListoParaTransmitir ? "LISTO" : "ESPERANDO");
+    Serial.print(F(" | Transferencia:"));
+    Serial.print(transferenciaActiva ? "ON" : "OFF");
+    Serial.print(F(" | HS:"));
+    Serial.println(handshakePendiente ? "PENDIENTE" : "NO");
+  }
+
+  if (progreso.estado == EstadoSender::ESTADO_PREPARANDO &&
+      !archivoListoParaTransmitir &&
+      !transferenciaActiva) {
     procesarComandoApp();
   }
 
@@ -198,6 +222,7 @@ void loop() {
   if (archivoListoParaTransmitir &&
       transferenciaActiva &&
       progreso.estado == EstadoSender::ESTADO_PREPARANDO) {
+    Serial.println(F("\n[!] PREPARANDO TRANSMISION AL RECEIVER..."));
     prepararTransmisionArchivo(); 
     handshakePendiente = true;
     archivoListoParaTransmitir = false;
@@ -257,12 +282,7 @@ void loop() {
         handshakePendiente = false;
         datosPreparados = false;
         archivoRecibido = false;
-        recibiendoArchivo = false;
-        tamArchivoRecibido = 0;
-        tamArchivoEsperado = 0;
-        offsetDatos = 0;
         progreso.estado = EstadoSender::ESTADO_PREPARANDO;
-        resetSender();
         Serial.println(F("[INFO] Transferencia finalizada. Sender listo para nuevo archivo."));
       }
       break;
@@ -274,11 +294,6 @@ void loop() {
         datosPreparados = false;
         archivoListoParaTransmitir = false;
         archivoRecibido = false;
-        recibiendoArchivo = false;
-        tamArchivoRecibido = 0;
-        tamArchivoEsperado = 0;
-        offsetDatos = 0;
-        resetSender();
         Serial.println(F("[ERROR] Transferencia abortada. Sender en espera de nuevo START."));
       }
       progreso.estado = EstadoSender::ESTADO_PREPARANDO;
@@ -570,22 +585,23 @@ void procesarFrameRespuesta(const Enlace::TramaLigera &trama) {
 }
 
 void onAckRecibido(uint8_t ack) {
-  Serial.print(F("[NANO ACK] Recibido ack="));
-  Serial.println(ack);
+  Serial.print(F("[NANO ACK RECIBIDO] ack="));
+  Serial.print(ack);
+  Serial.print(F(" handshakePendiente="));
+  Serial.println(handshakePendiente);
   
   ultimoAckRecibido = ack;
 
   if (handshakePendiente && ack == 0) {
-    Serial.println(F("[NANO] Handshake completado!"));
+    Serial.println(F("[NANO HS OK] Handshake confirmado! Preparando datos..."));
     handshakePendiente = false;
     progreso.estado = EstadoSender::ESTADO_PREPARANDO;
-    Serial.println(F("Handshake completado con el receptor. Preparando tramas para transmisión...")); 
     return;
   }
 
   if (progreso.estado == EstadoSender::ESTADO_ESPERANDO_ACK) {
-    Serial.println(F("[NANO] Procesando ACK de datos"));
-    confirmarVentanaDatos(ack);
+    Serial.print(F("[NANO ACK DATOS] Confirmando ventana, ack="));
+    Serial.println(ack);
     return;
   }
 }
@@ -610,8 +626,21 @@ void crearMetadataHandshake(uint8_t *payload) {
 }
 
 void enviarHandshake() {
-  Serial.print(F("[HANDSHAKE] Tiempo envio: "));
-  Serial.println(millis());
+  static unsigned long ultimoIntento = 0;
+  
+  // Solo intentar cada 1 segundo para no saturar
+  if (millis() - ultimoIntento < 1000) {
+    return;
+  }
+  ultimoIntento = millis();
+  
+  Serial.print(F("[HS INTENTO] Tiempo: "));
+  Serial.print(millis());
+  Serial.print(F(" Dir: 0x"));
+  Serial.print(direccionRx, HEX);
+  Serial.print(F(" Archivo: "));
+  Serial.println(tamArchivoRecibido);
+  
   uint8_t metadata[TAM_METADATA_HANDSHAKE];
   crearMetadataHandshake(metadata);
 
@@ -626,32 +655,32 @@ void enviarHandshake() {
   );
 
   if (estadoCodificacion == Enlace::CODIFICACION_OK) {
+    Serial.println(F("[HS OK] Handshake ENVIADO ← Esperando ACK(0)..."));
     progreso.estado = EstadoSender::ESTADO_ESPERANDO_ACK;
     ultimoFrameTime = millis();
-    Serial.println(F("Handshake enviado al receptor. Esperando ACK de confirmacion..."));
+    handshakePendiente = true;  // Sigue siendo pendiente hasta recibir ACK
   } else {
-    Serial.println(F("Error al codificar el handshake. No se envio."));
+    Serial.print(F("[HS ERROR] Fallo en codificacion: "));
+    Serial.println(estadoCodificacion);
+    Serial.println(F("[HS REINTENTANDO EN 1s..."));
   }
 }
 
 void recibirMensaje() {
-  Serial.print(F("[NANO RECV] Tiempo: "));
-  Serial.print(millis());
-  Serial.print(F(" puedeLeerByte="));
-  Serial.print(Fisica::puedeLeerByte());
-  Serial.print(F(" available="));
-  Serial.println(Fisica::puedeLeerByte() ? "2+" : "0-1");
+  bool hayBytes = Fisica::puedeLeerByte();
   
-  if (!Fisica::puedeLeerByte()) {
-    if (progreso.estado == EstadoSender::ESTADO_ESPERANDO_ACK &&
-        millis() - ultimoFrameTime > TIMEOUT_ACK) {
-      Serial.println(F("[TIMEOUT] No se recibio ACK"));
-      revisarTimeoutsDatos();
+  if (!hayBytes) {
+    if (progreso.estado == EstadoSender::ESTADO_ESPERANDO_ACK) {
+      unsigned long tiempoEspera = millis() - ultimoFrameTime;
+      if (tiempoEspera > TIMEOUT_ACK) {
+        Serial.print(F("[NANO TIMEOUT] "));
+        Serial.print(tiempoEspera);
+        Serial.println(F("ms sin respuesta"));
+        revisarTimeoutsDatos();
+      }
     }
     return;
   }
-
-  Serial.println(F("[NANO] Hay bytes disponibles para leer"));
 
   while (Fisica::puedeLeerByte()) {
     uint8_t byteRecibido = 0;
@@ -659,12 +688,12 @@ void recibirMensaje() {
 
     if (!Fisica::leerByte(byteRecibido, errorIrrecuperable)) {
       if (errorIrrecuperable) {
-        Serial.println(F("[NANO ERROR] Error Hamming no corregible"));
+        Serial.println(F("[NANO ERROR] Hamming no corregible"));
       }
       return;
     }
 
-    Serial.print(F("[NANO RX] Byte: 0x"));
+    Serial.print(F("[NANO RX BYTE] 0x"));
     Serial.println(byteRecibido, HEX);
 
     ultimoFrameTime = millis();
@@ -675,13 +704,16 @@ void recibirMensaje() {
       parserRespuesta.procesarByte(byteRecibido, trama, error);
 
     if (estadoParser == Enlace::PARSER_TRAMA_COMPLETA) {
-      Serial.print(F("[NANO TRAMA] Dir: 0x"));
+      Serial.print(F("[NANO TRAMA COMPLETA] Dir:0x"));
       Serial.print(trama.direccion, HEX);
-      Serial.print(F(" Ctrl: 0x"));
+      Serial.print(F(" Ctrl:0x"));
       Serial.print(trama.control, HEX);
-      Serial.print(F(" Ack: "));
+      Serial.print(F(" Ack:"));
       Serial.println(trama.ack);
       procesarFrameRespuesta(trama);
+    } else if (estadoParser == Enlace::PARSER_TRAMA_INVALIDA) {
+      Serial.print(F("[NANO PARSER ERROR] Trama invalida: "));
+      Serial.println(estadoParser);
     }
   }
 }
@@ -794,6 +826,8 @@ void procesarComandoApp() {
       }
       // === START Command ===
       else if (strncmp(bufferComandoApp, "START", 5) == 0) {
+        Serial.print(F("[CMD RECIBIDO] Buffer: "));
+        Serial.println(bufferComandoApp);
         Serial.println(F("[App] START recibido de app."));
         
         char *token = strtok(bufferComandoApp, " ");
