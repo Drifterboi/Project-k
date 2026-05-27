@@ -602,6 +602,7 @@ void onAckRecibido(uint8_t ack) {
   if (progreso.estado == EstadoSender::ESTADO_ESPERANDO_ACK) {
     Serial.print(F("[NANO ACK DATOS] Confirmando ventana, ack="));
     Serial.println(ack);
+    confirmarVentanaDatos(ack);
     return;
   }
 }
